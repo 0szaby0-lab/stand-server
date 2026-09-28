@@ -503,19 +503,25 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         # 5. Redeem License Key (Web UI /account/register)
         if self.path in ('/api/redeem', '/api/redeem.php', '/api/redeem.html'):
             data = self.parse_body()
-            license_key = data.get("license_key", "")
+            license_key = data.get("license_key", "").strip()
             
-            chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-            account_id = "acc_" + "".join(secrets.choice(chars) for _ in range(27))
-            activation_key = "Stand-Activate-" + "".join(secrets.choice(chars) for _ in range(16))
-            privilege = 3
-
-            return self.send_json({
-                "account_id": account_id,
-                "activation_key": activation_key,
-                "privilege": privilege,
-                "created_quiz_success": True
-            })
+            key_doc = None
+            if db is not None:
+                key_doc = db.keys.find_one({"key": license_key, "status": "active"})
+            else:
+                key_doc = memory_keys.get(license_key)
+                if key_doc and key_doc.get("status") != "active":
+                    key_doc = None
+            
+            if key_doc:
+                return self.send_json({
+                    "account_id": key_doc["key"],
+                    "activation_key": key_doc["key"],
+                    "privilege": int(key_doc.get("privilege", 3)),
+                    "created_quiz_success": True
+                })
+            else:
+                return self.send_json({"error": "Érvénytelen vagy már felhasznált licenc kulcs!"})
 
         # 6. Telemetry / Event logging
         if self.path in ('/api/event', '/api/event.php', '/api/event.html'):
