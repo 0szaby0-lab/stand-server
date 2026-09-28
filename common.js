@@ -101,28 +101,21 @@ function ensure_account_info_is_up_to_date(logged_in_cb, logged_out_cb)
 		logged_out_cb();
 		return;
 	}
-	if ((time() - localStorage.getItem("last_account_data_update")) > (60 * 60))
+	$.post("/api/basic_account_info", {
+		account_id: localStorage.getItem("account_id")
+	}).done(function(data)
 	{
-		$.post("/api/basic_account_info", {
-			account_id: localStorage.getItem("account_id")
-		}).done(function(data)
+		if (data != "bad" && !data.error)
 		{
-			if (data != "bad")
-			{
-				store_account_data(data);
-				logged_in_cb();
-			}
-			else
-			{
-				logged_out_cb();
-			}
-		}).fail(function()
+			store_account_data(data);
+			logged_in_cb();
+		}
+		else
 		{
 			logged_out_cb();
-		});
-	}
-	else
+		}
+	}).fail(function()
 	{
-		logged_in_cb();
-	}
+		logged_out_cb();
+	});
 }
