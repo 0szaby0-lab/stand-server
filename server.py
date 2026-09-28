@@ -14,6 +14,13 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "standadmin2026")
 SESSION_SECRET = os.environ.get("SESSION_SECRET", secrets.token_hex(32))
 STRICT_MODE = os.environ.get("STRICT_MODE", "true").lower() in ("true", "1", "yes")
 
+# Discord Integrations
+DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
+DISCORD_GUILD_ID = os.environ.get("DISCORD_GUILD_ID", "")
+ROLE_BASIC = os.environ.get("ROLE_BASIC", "")
+ROLE_REGULAR = os.environ.get("ROLE_REGULAR", "")
+ROLE_ULTIMATE = os.environ.get("ROLE_ULTIMATE", "")
+
 # Active admin sessions: token -> timestamp
 admin_sessions = set()
 
@@ -58,6 +65,7 @@ def init_mongo():
             # Ensure indexes
             db.keys.create_index("key", unique=True)
             db.heartbeats.create_index("timestamp")
+            db.account_discords.create_index([("account_id", 1), ("discord_id", 1)], unique=True)
         except Exception as e:
             print(f"[MongoDB] Connection failed: {e}. Falling back to in-memory mode.")
             db = None
@@ -71,6 +79,43 @@ def check_admin_auth(handler):
     cookies = urllib.parse.parse_qs(cookie_header.replace('; ', '&'))
     token = cookies.get('stand_admin_token', [''])[0]
     return token in admin_sessions
+
+import urllib.request
+import urllib.error
+
+def discord_api_request(method, endpoint, data=None):
+    if not DISCORD_BOT_TOKEN: return None
+    url = f"https://discord.com/api/v10{endpoint}"
+    headers = {
+        "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    body = None
+    if data:
+        body = json.dumps(data).encode('utf-8')
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req) as response:
+            return response.read()
+    except Exception as e:
+        print(f"[Discord API Error] {e}")
+        return None
+
+def kick_discord_member(user_id):
+    if DISCORD_GUILD_ID:
+        discord_api_request("DELETE", f"/guilds/{DISCORD_GUILD_ID}/members/{user_id}")
+
+def add_guild_member(user_id, access_token, roles):
+    if DISCORD_GUILD_ID:
+        data = {"access_token": access_token, "roles": roles}
+        discord_api_request("PUT", f"/guilds/{DISCORD_GUILD_ID}/members/{user_id}", data=data)
+
+def update_member_role(user_id, add_roles, remove_roles):
+    if not DISCORD_GUILD_ID: return
+    for r in add_roles:
+        if r: discord_api_request("PUT", f"/guilds/{DISCORD_GUILD_ID}/members/{user_id}/roles/{r}")
+    for r in remove_roles:
+        if r: discord_api_request("DELETE", f"/guilds/{DISCORD_GUILD_ID}/members/{user_id}/roles/{r}")
 
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
     def send_json(self, data, status=200):
@@ -144,6 +189,84 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
             return
+
+        # ==========================================
+        # 1.5. DISCORD OAUTH CALLBACK LOGIC
+        # ==========================================
+        if self.path.startswith('/api/discord/join_callback') or self.path.startswith('/api/discord/update_callback'):
+            data = self.parse_body()
+            account_id = data.get("account_id")
+            discord_id = data.get("discord_id")
+            access_token = data.get("access_token")
+            is_update = "update" in self.path
+            
+            if not account_id or not discord_id:
+                return self.send_json({"error": "Missing parameters"}, status=400)
+                
+            key_doc = None
+            if db is not None:
+                key_doc = db.keys.find_one({"key": account_id})
+            
+            if not key_doc or key_doc.get("status") == "banned":
+                return self.send_json({"error": "Invalid or banned account"}, status=403)
+                
+            last_discord = key_doc.get("last_known_discord_id")
+            
+            if is_update:
+                if last_discord != discord_id:
+                    return self.send_json({"error": "You need to join our Discord before you can use this."}, status=403)
+            else:
+                if last_discord != discord_id:
+                    # Kick old account
+                    if last_discord:
+                        kick_discord_member(last_discord)
+                    
+                    if db is not None:
+                        db.keys.update_one({"key": account_id}, {"$set": {"last_known_discord_id": discord_id}})
+                        
+                        # Tally discords linked
+                        ads = list(db.account_discords.find({"account_id": account_id}))
+                        is_new = True
+                        num_recent_ads = 1
+                        forty_five_days_ago = now_utc() - timedelta(days=45)
+                        
+                        for ad in ads:
+                            if ad.get("discord_id") == discord_id:
+                                is_new = False
+                                db.account_discords.update_one({"_id": ad["_id"]}, {"$set": {"last_join": now_utc()}})
+                                break
+                            elif ad.get("last_join") and ad.get("last_join") > forty_five_days_ago:
+                                num_recent_ads += 1
+                                
+                        if is_new:
+                            db.account_discords.insert_one({"account_id": account_id, "discord_id": discord_id, "last_join": now_utc()})
+                            
+                        # Suspend if too many recent discord accounts
+                        if num_recent_ads >= 4:
+                            db.keys.update_one({"key": account_id}, {"$set": {"status": "banned", "suspended_for": "account sharing or ban evasion"}})
+                            return self.send_json({"error": "Banned for account sharing or ban evasion."}, status=403)
+
+            # Assign roles based on privilege
+            priv = int(key_doc.get("privilege", 3))
+            roles_to_add = []
+            roles_to_remove = []
+            
+            if priv == 1:
+                roles_to_add = [ROLE_BASIC]
+                roles_to_remove = [ROLE_REGULAR, ROLE_ULTIMATE]
+            elif priv == 2:
+                roles_to_add = [ROLE_REGULAR]
+                roles_to_remove = [ROLE_BASIC, ROLE_ULTIMATE]
+            elif priv == 3:
+                roles_to_add = [ROLE_ULTIMATE]
+                roles_to_remove = [ROLE_BASIC, ROLE_REGULAR]
+                
+            if is_update:
+                update_member_role(discord_id, roles_to_add, roles_to_remove)
+            else:
+                add_guild_member(discord_id, access_token, roles_to_add)
+                
+            return self.send_json({"success": True, "message": "Discord linked successfully."})
 
         # ==========================================
         # 2. ADMIN ACTIONS (PASSWORD PROTECTED)
@@ -443,7 +566,39 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             return self.send_text("0")
 
         if self.path.startswith('/api/internal_get_alts') or self.path.startswith('/internal_get_alts'):
+            parsed_path = urllib.parse.urlparse(self.path)
+            discord_id = urllib.parse.parse_qs(parsed_path.query).get('0', [''])[0]
+            if discord_id and db is not None:
+                key_doc = db.keys.find_one({"last_known_discord_id": discord_id, "status": "active"})
+                if key_doc:
+                    alts = list(db.account_discords.find(
+                        {"account_id": key_doc["key"], "discord_id": {"$ne": discord_id}},
+                        {"_id": 0, "discord_id": 1, "last_join": 1}
+                    ))
+                    # Convert datetime to timestamp for API compatibility
+                    for alt in alts:
+                        if isinstance(alt.get("last_join"), datetime):
+                            alt["last_join"] = int(alt["last_join"].timestamp())
+                    return self.send_json(alts)
             return self.send_json([])
+
+        if self.path.startswith('/api/internal_check_pinkeye') or self.path.startswith('/internal_check_pinkeye'):
+            parsed_path = urllib.parse.urlparse(self.path)
+            account_id = urllib.parse.parse_qs(parsed_path.query).get('0', [''])[0]
+            if account_id and db is not None:
+                key_doc = db.keys.find_one({"key": account_id, "status": "active"})
+                if key_doc:
+                    return self.send_json({"dev": False, "pinkeyed": False})
+            return self.send_json({"dev": False, "pinkeyed": False})
+
+        if self.path.startswith('/api/internal_get_privilege') or self.path.startswith('/internal_get_privilege'):
+            parsed_path = urllib.parse.urlparse(self.path)
+            account_id = urllib.parse.parse_qs(parsed_path.query).get('0', [''])[0]
+            if account_id and db is not None:
+                key_doc = db.keys.find_one({"key": account_id, "status": "active"})
+                if key_doc:
+                    return self.send_text(str(key_doc.get("privilege", 3)))
+            return self.send_text("0")
 
         # ==========================================
         # ADMIN API (GET)
