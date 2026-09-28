@@ -23,18 +23,10 @@
 					<h1>Stand Account Login</h1>
 					<form onsubmit="submit_login();return false;" method="GET" action="/bad_browser.txt">
 						<div class="input-group">
-							<input id="acctid" type="password" class="form-control" placeholder="Leave empty for auto-generated key, or paste a key here" title="Stand Account ID" />
+							<input id="acctid" type="password" class="form-control" placeholder="Your account id" required pattern="[a-z0-9]{31}" title="Stand Account ID" />
 							<div class="input-group-append">
 								<a id="reveal" href="#" class="btn">Reveal</a>
 							</div>
-						</div>
-						<div class="input-group" style="margin-top: 10px;">
-							<select id="tier_select" class="form-control">
-								<option value="Free-">Free</option>
-								<option value="Basic-">Basic</option>
-								<option value="Regular-">Regular</option>
-								<option value="Ultimate-">Ultimate</option>
-							</select>
 						</div>
 						<p><input type="submit" class="btn btn-primary" value="Login" /></p>
 					</form>
@@ -84,26 +76,31 @@
 			}
 			login_pending = true;
 			let account_id = document.getElementById("acctid").value;
-			
-			// If it's a random auto-generated key, use Free. If not, use whatever they typed.
-			let tier = document.getElementById("tier_select") ? document.getElementById("tier_select").value : "Ultimate-";
-			
-			if (account_id === "") {
-			    let fakeKey = tier;
-			    const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-			    for(let i=0; i<25; i++) fakeKey += chars.charAt(Math.floor(Math.random() * chars.length));
-			    account_id = fakeKey;
-			}
-
-			let data = {
-				account_id: account_id,
-				privilege: 3,
-				activation_key: account_id,
-				created_quiz_success: true
-			};
-			store_account_data(data);
-			on_logged_in();
-			login_pending = false;
+			$.post("/api/basic_account_info", {
+				account_id
+			}).done(function(data)
+			{
+				if (data == "bad")
+				{
+					alert("There is no account matching the exact id you provided. If you handwrote it, check characters like 0/o, l/i/1, etc.");
+				}
+				else if (data == "ratelimit")
+				{
+					alert("You're doing this too much. Try again later.");
+				}
+				else
+				{
+					data.account_id = account_id;
+					store_account_data(data);
+					on_logged_in();
+				}
+			}).fail(function()
+			{
+				alert("Connection error");
+			}).always(function()
+			{
+				login_pending = false;
+			});
 		}
 
 		document.getElementById("reveal").onclick = function()
