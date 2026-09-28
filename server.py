@@ -6,7 +6,7 @@ import urllib.parse
 import secrets
 import hashlib
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 # Port for Render or local
 PORT = int(os.environ.get("PORT", 6969))
@@ -25,6 +25,9 @@ db = None
 # In-memory fallback if MongoDB is not connected
 memory_keys = {}
 memory_heartbeats = []
+
+def now_utc():
+    return datetime.now(timezone.utc)
 
 def init_mongo():
     global mongo_client, db
@@ -148,7 +151,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 
                 expires_at = None
                 if days > 0:
-                    expires_at = datetime.utcnow() + timedelta(days=days)
+                    expires_at = now_utc() + timedelta(days=days)
 
                 privilege = "3"
                 root_name = f"Stand ({tier})"
@@ -166,7 +169,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                     "root_name": root_name,
                     "note": note,
                     "status": "active", # active, banned
-                    "created_at": datetime.utcnow(),
+                    "created_at": now_utc(),
                     "expires_at": expires_at,
                     "hwid": "",
                     "last_ip": "",
@@ -235,7 +238,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                         "status": "REJECTED_NOT_FOUND",
                         "client_ip": client_ip,
                         "hwid": hwid,
-                        "timestamp": datetime.utcnow()
+                        "timestamp": now_utc()
                     }
                     if db is not None:
                         db.heartbeats.insert_one(log_entry)
@@ -247,7 +250,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                         "status": "REJECTED_BANNED",
                         "client_ip": client_ip,
                         "hwid": hwid,
-                        "timestamp": datetime.utcnow()
+                        "timestamp": now_utc()
                     }
                     if db is not None:
                         db.heartbeats.insert_one(log_entry)
@@ -255,17 +258,21 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
 
                 # Check expiration
                 expires_at = key_doc.get("expires_at")
-                if expires_at and isinstance(expires_at, datetime) and datetime.utcnow() > expires_at:
-                    log_entry = {
-                        "key": activation_key,
-                        "status": "REJECTED_EXPIRED",
-                        "client_ip": client_ip,
-                        "hwid": hwid,
-                        "timestamp": datetime.utcnow()
-                    }
-                    if db is not None:
-                        db.heartbeats.insert_one(log_entry)
-                    return self.send_json({"m": "Ez a licenc kulcs lejárt!"}, status=403)
+                if expires_at:
+                    if isinstance(expires_at, datetime):
+                        if expires_at.tzinfo is None:
+                            expires_at = expires_at.replace(tzinfo=timezone.utc)
+                        if now_utc() > expires_at:
+                            log_entry = {
+                                "key": activation_key,
+                                "status": "REJECTED_EXPIRED",
+                                "client_ip": client_ip,
+                                "hwid": hwid,
+                                "timestamp": now_utc()
+                            }
+                            if db is not None:
+                                db.heartbeats.insert_one(log_entry)
+                            return self.send_json({"m": "Ez a licenc kulcs lejárt!"}, status=403)
 
             # Extract privileges from validated key
             if key_doc:
@@ -275,7 +282,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 
                 # Update usage stats
                 update_fields = {
-                    "last_seen": datetime.utcnow(),
+                    "last_seen": now_utc(),
                     "last_ip": client_ip,
                 }
                 if hwid and not key_doc.get("hwid"):
@@ -303,7 +310,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 "root_name": root_name,
                 "client_ip": client_ip,
                 "hwid": hwid,
-                "timestamp": datetime.utcnow()
+                "timestamp": now_utc()
             }
             if db is not None:
                 try:
@@ -323,7 +330,57 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             }
             return self.send_json(response)
 
-        # 4. Telemetry / Event logging
+        # 4. Basic Account Info (Web UI /account/)
+        if self.path in ('/api/basic_account_info', '/api/basic_account_info.php', '/api/basic_account_info.html'):
+            data = self.parse_body()
+            account_id = data.get("account_id", "")
+            
+            # Look up account in MongoDB keys
+            key_doc = None
+            if db is not None and account_id:
+                try:
+                    key_doc = db.keys.find_one({"key": account_id})
+                except Exception as e:
+                    print(f"[MongoDB] Account info error: {e}")
+
+            if not key_doc and account_id in memory_keys:
+                key_doc = memory_keys.get(account_id)
+
+            if key_doc:
+                return self.send_json({
+                    "activation_key": key_doc.get("key"),
+                    "privilege": int(key_doc.get("privilege", 3)),
+                    "suspended_for": "Banned by Admin" if key_doc.get("status") == "banned" else "",
+                    "coins": 0,
+                    "created_quiz_success": True
+                })
+            else:
+                return self.send_json({
+                    "activation_key": account_id if account_id else "Stand-Activate-UltimateMockKey",
+                    "privilege": 3,
+                    "suspended_for": "",
+                    "coins": 0,
+                    "created_quiz_success": True
+                })
+
+        # 5. Redeem License Key (Web UI /account/register)
+        if self.path in ('/api/redeem', '/api/redeem.php', '/api/redeem.html'):
+            data = self.parse_body()
+            license_key = data.get("license_key", "")
+            
+            chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            account_id = "acc_" + "".join(secrets.choice(chars) for _ in range(27))
+            activation_key = "Stand-Activate-" + "".join(secrets.choice(chars) for _ in range(16))
+            privilege = 3
+
+            return self.send_json({
+                "account_id": account_id,
+                "activation_key": activation_key,
+                "privilege": privilege,
+                "created_quiz_success": True
+            })
+
+        # 6. Telemetry / Event logging
         if self.path in ('/api/event', '/api/event.php', '/api/event.html'):
             data = self.parse_body()
             if db is not None:
@@ -331,13 +388,14 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                     db.events.insert_one({
                         "data": data,
                         "client_ip": client_ip,
-                        "timestamp": datetime.utcnow()
+                        "timestamp": now_utc()
                     })
                 except Exception:
                     pass
             return self.send_text("1")
 
-        return super().do_POST()
+        # Fallback for unhandled POSTs (never call super().do_POST() as SimpleHTTPRequestHandler doesn't implement it)
+        return self.send_json({"error": "Endpoint not found"}, status=404)
 
     def do_GET(self):
         # Health check endpoint for Render
@@ -363,7 +421,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 total_keys = db.keys.count_documents({})
                 active_keys = db.keys.count_documents({"status": "active"})
                 banned_keys = db.keys.count_documents({"status": "banned"})
-                since_yesterday = datetime.utcnow() - timedelta(hours=24)
+                since_yesterday = now_utc() - timedelta(hours=24)
                 heartbeats_count = db.heartbeats.count_documents({"timestamp": {"$gte": since_yesterday}})
             else:
                 total_keys = len(memory_keys)
@@ -390,7 +448,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 keys_list = list(cursor)
             else:
                 keys_list = list(memory_keys.values())
-                keys_list.sort(key=lambda x: x.get("created_at") or datetime.min, reverse=True)
+                keys_list.sort(key=lambda x: x.get("created_at") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
 
             return self.send_json(keys_list)
 
