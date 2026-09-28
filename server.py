@@ -417,6 +417,35 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             return self.send_text("OK")
 
         # ==========================================
+        # OLD API STAND ONE ENDPOINTS
+        # ==========================================
+        if self.path.startswith('/api/internal_whack_a_mole') or self.path.startswith('/internal_whack_a_mole'):
+            parsed_path = urllib.parse.urlparse(self.path)
+            query = urllib.parse.parse_qs(parsed_path.query)
+            account_id = query.get('0', [''])[0]
+            source = query.get('1', [''])[0]
+            
+            def get_reason(src):
+                if src == "discord": return "account id sharing (D)"
+                if src == "telegram": return "compromised account (T)"
+                return None
+                
+            reason = get_reason(source)
+            if account_id and source and reason:
+                if db is not None:
+                    db.keys.update_one({"key": account_id}, {"$set": {"status": "banned", "suspended_for": reason}})
+                    return self.send_text("1")
+                else:
+                    if account_id in memory_keys:
+                        memory_keys[account_id]["status"] = "banned"
+                        memory_keys[account_id]["suspended_for"] = reason
+                        return self.send_text("1")
+            return self.send_text("0")
+
+        if self.path.startswith('/api/internal_get_alts') or self.path.startswith('/internal_get_alts'):
+            return self.send_json([])
+
+        # ==========================================
         # ADMIN API (GET)
         # ==========================================
         if self.path == '/api/admin/check':
