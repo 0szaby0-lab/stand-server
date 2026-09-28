@@ -20,7 +20,6 @@ if MONGO_URI:
         db = mongo_client.get_default_database()
         if db is None:
             db = mongo_client["stand_db"]
-        # Trigger quick connection check
         mongo_client.admin.command('ping')
         print("[MongoDB] Successfully connected to MongoDB.")
     except Exception as e:
@@ -30,6 +29,15 @@ else:
     print("[MongoDB] No MONGO_URI configured. Running in standalone mode.")
 
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
+    def send_json(self, data, status=200):
+        body = json.dumps(data).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
         if self.path == '/api/heartbeat':
             content_length = int(self.headers.get('Content-Length', 0))
@@ -42,8 +50,8 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
 
             activation_key = data.get("a", "")
             
-            # Default fallback tier logic
-            privilege = "3" # Default to Ultimate if standalone
+            # Default fallback tier logic (Ultimate)
+            privilege = "3"
             unlocks = 255
             root_name = "Stand (Ultimate)"
 
@@ -73,7 +81,6 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                         unlocks = int(key_record.get("unlocks", unlocks))
                         root_name = key_record.get("root_name", root_name)
                     else:
-                        # Auto-register new key if not present
                         db.keys.insert_one({
                             "key": activation_key,
                             "privilege": privilege,
@@ -82,7 +89,6 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                             "first_seen": datetime.utcnow()
                         })
 
-                    # Log heartbeat
                     db.heartbeats.insert_one({
                         "key": activation_key,
                         "privilege": privilege,
@@ -100,43 +106,75 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 "r": root_name,
                 "t": "ACTVTE_SUCC2"
             }
-            
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode('utf-8'))
-            return
+            return self.send_json(response)
             
         return super().do_POST()
 
     def do_GET(self):
         # Health check endpoint for Render
-        if self.path == '/healthz' or self.path == '/ping':
+        if self.path in ('/healthz', '/ping'):
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain')
             self.end_headers()
             self.wfile.write(b'OK')
             return
+
+        # Specific API endpoints that return JSON
+        if self.path in ('/api/tuna.json', '/api/tuna.json.php', '/api/tuna.json.html'):
+            bg54 = b""
+            bg55 = b""
+            blob = b""
+            if os.path.exists("api/bgscript-5.4.txt"):
+                with open("api/bgscript-5.4.txt", "rb") as f:
+                    bg54 = f.read().decode('utf-8', errors='ignore')
+            if os.path.exists("api/bgscript-5.5.txt"):
+                with open("api/bgscript-5.5.txt", "rb") as f:
+                    bg55 = f.read().decode('utf-8', errors='ignore')
+            if os.path.exists("api/blobfish.txt"):
+                with open("api/blobfish.txt", "rb") as f:
+                    blob = f.read().decode('utf-8', errors='ignore')
+
+            tuna_data = {
+                "v": 1337420,
+                "lnv": "3407a",
+                "repo": [],
+                "b": bg54,
+                "b2": bg55,
+                "ba": [],
+                "f": blob,
+                "a": []
+            }
+            return self.send_json(tuna_data)
+
+        if self.path in ('/api/packages.json', '/api/packages.json.php', '/api/packages.json.html'):
+            return self.send_json([])
+
+        if self.path in ('/stand-versions.txt', '/stand-versions.txt.html', '/versions.txt', '/versions.txt.html'):
+            ver_text = b"111.1\n"
+            if os.path.exists("stand-versions.txt"):
+                with open("stand-versions.txt", "rb") as f:
+                    ver_text = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.send_header('Content-Length', str(len(ver_text)))
+            self.end_headers()
+            self.wfile.write(ver_text)
+            return
+
         return super().do_GET()
 
     def translate_path(self, path):
-        # Default translation relative to current script directory
         translated = super().translate_path(path)
         
-        # If it's a directory, let standard handler deal with index.html
         if os.path.isdir(translated):
             return translated
             
-        # If the file exists exactly as requested, serve it
         if os.path.isfile(translated):
             return translated
             
-        # Try appending .html (for extensionless URLs like /account/register)
         if os.path.isfile(translated + '.html'):
             return translated + '.html'
             
-        # If requested .php, try .html instead
         if translated.endswith('.php'):
             html_path = translated[:-4] + '.html'
             if os.path.isfile(html_path):
@@ -148,7 +186,6 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
 
 if __name__ == '__main__':
-    # Ensure working dir is script dir
     script_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(script_dir)
     
