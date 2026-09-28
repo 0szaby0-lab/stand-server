@@ -29,6 +29,20 @@ memory_heartbeats = []
 def now_utc():
     return datetime.now(timezone.utc)
 
+def is_mongo_alive():
+    global mongo_client, db
+    if not MONGO_URI:
+        return False
+    if db is None or mongo_client is None:
+        init_mongo()
+    if db is not None and mongo_client is not None:
+        try:
+            mongo_client.admin.command('ping')
+            return True
+        except Exception:
+            return False
+    return False
+
 def init_mongo():
     global mongo_client, db
     if MONGO_URI:
@@ -435,7 +449,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 "banned_keys": banned_keys,
                 "heartbeats_24h": heartbeats_count,
                 "strict_mode": STRICT_MODE,
-                "db_connected": db is not None
+                "db_connected": is_mongo_alive()
             })
 
         if self.path == '/api/admin/keys':

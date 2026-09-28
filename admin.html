@@ -423,7 +423,11 @@
                 <span>Stand</span>
                 <span class="brand-badge">ADMIN CONSOLE</span>
             </div>
-            <div id="auth-controls" style="display:none;">
+            <div id="auth-controls" style="display:none; align-items:center; gap:16px;">
+                <div id="db-status-badge" class="badge" style="background:rgba(255,255,255,0.06); border:1px solid var(--border-subtle); font-size:12px; padding:6px 12px; display:inline-flex; align-items:center; gap:8px;">
+                    <div id="db-status-dot" class="pulse-dot" style="background:#8b92a5; box-shadow:none;"></div>
+                    <span id="db-status-text" style="color:var(--text-muted);">MongoDB: Ellenőrzés...</span>
+                </div>
                 <button class="btn btn-secondary btn-sm" onclick="logout()">Kilépés</button>
             </div>
         </div>
@@ -671,6 +675,26 @@
                 document.getElementById('stat-active').innerText = stats.active_keys;
                 document.getElementById('stat-banned').innerText = stats.banned_keys;
                 document.getElementById('stat-heartbeats').innerText = stats.heartbeats_24h;
+                const dbBadge = document.getElementById("db-status-badge");
+                const dbDot = document.getElementById("db-status-dot");
+                const dbText = document.getElementById("db-status-text");
+                if (stats.db_connected) {
+                    dbBadge.style.background = "rgba(16, 185, 129, 0.12)";
+                    dbBadge.style.borderColor = "rgba(16, 185, 129, 0.3)";
+                    dbDot.className = "pulse-dot";
+                    dbDot.style.background = "#10b981";
+                    dbDot.style.boxShadow = "0 0 8px #10b981";
+                    dbText.style.color = "#10b981";
+                    dbText.innerText = "MongoDB: Csatlakozva ✓";
+                } else {
+                    dbBadge.style.background = "rgba(239, 68, 68, 0.12)";
+                    dbBadge.style.borderColor = "rgba(239, 68, 68, 0.3)";
+                    dbDot.className = "pulse-dot-red";
+                    dbDot.style.background = "#ef4444";
+                    dbDot.style.boxShadow = "0 0 8px #ef4444";
+                    dbText.style.color = "#ef4444";
+                    dbText.innerText = "MongoDB: Nincs csatlakozva ✕ (Memória mód)";
+                }
             } catch (e) {}
         }
 
