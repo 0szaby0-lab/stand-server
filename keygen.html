@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Stand Keygen (Offline)</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uikit@3.5.7/dist/css/uikit.min.css" crossorigin="anonymous" />
+	<style>
+		body { background: #121212; color: #fff; padding: 50px; text-align: center; font-family: monospace; }
+		.key-box { background: #222; padding: 20px; font-size: 24px; border: 1px solid #444; border-radius: 5px; margin: 20px 0; word-break: break-all; }
+		.btn { background: #007bff; color: #fff; padding: 10px 20px; border: none; cursor: pointer; font-size: 18px; border-radius: 3px; }
+		.btn:hover { background: #0056b3; }
+	</style>
+</head>
+<body>
+	<h1>Stand Offline Keygen</h1>
+	<p>Generálj egy kulcsot, amit bemásolhatsz a Stand menübe.</p>
+	<div id="key-display" class="key-box">Nyomd meg a gombot...</div>
+	<button class="btn" onclick="generateKey()">Kulcs Generálása</button>
+	<button class="btn" onclick="copyKey()">Másolás</button>
+
+	<script>
+		function generateKey() {
+			const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+			let key = 'Stand-Activate-';
+			for(let i=0; i<31; i++) {
+				key += chars.charAt(Math.floor(Math.random() * chars.length));
+			}
+			document.getElementById('key-display').innerText = key;
+		}
+
+		function copyKey() {
+			const text = document.getElementById('key-display').innerText;
+			if(text.startsWith('Stand-Activate-')) {
+				navigator.clipboard.writeText(text);
+				alert('Másolva vágólapra!');
+			}
+		}
+
+		// Generate one on load
+		generateKey();
+	</script>
+</body>
+</html>

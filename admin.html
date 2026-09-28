@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Stand Admin Panel</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<link href="/halfmoon-variables.min.css" crossorigin="anonymous" rel="stylesheet" />
+	<link href="/halfmoon-config.css" rel="stylesheet" />
+</head>
+<body class="dark-mode">
+	<div class="page-wrapper with-navbar">
+		<nav class="navbar">
+			<div class="container-xl">
+				<a class="navbar-brand" href="/">Stand Admin</a>
+			</div>
+		</nav>
+		<div class="content-wrapper">
+			<div class="container-xl">
+				<div class="content">
+					<h1>License Key Generator</h1>
+					<p>Generate keys to give out to users.</p>
+					
+					<div class="card p-20">
+						<h2 class="card-title">Ultimate Edition Key</h2>
+						<div class="input-group">
+							<input type="text" id="generated-key" class="form-control" readonly />
+							<div class="input-group-append">
+								<button class="btn btn-primary" onclick="copyKey()">Copy</button>
+							</div>
+						</div>
+						<br>
+						<button class="btn btn-success" onclick="generateKey()">Generate New Key</button>
+					</div>
+
+				</div>
+			</div>
+		</div>
+	</div>
+	<script>
+		function generateKey() {
+			let fakeKey = "Stand-Activate-";
+			const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+			for(let i=0; i<30; i++) fakeKey += chars.charAt(Math.floor(Math.random() * chars.length));
+			document.getElementById('generated-key').value = fakeKey;
+		}
+
+		function copyKey() {
+			const text = document.getElementById('generated-key').value;
+			if(text) {
+				navigator.clipboard.writeText(text);
+				alert('Copied to clipboard!');
+			}
+		}
+
+		// Initial generation
+		generateKey();
+	</script>
+</body>
+</html>
