@@ -3,34 +3,61 @@ import socketserver
 import os
 import json
 import urllib.parse
-from datetime import datetime
+import secrets
+import hashlib
+import time
+from datetime import datetime, timedelta
 
 # Port for Render or local
 PORT = int(os.environ.get("PORT", 6969))
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "standadmin2026")
+SESSION_SECRET = os.environ.get("SESSION_SECRET", secrets.token_hex(32))
+STRICT_MODE = os.environ.get("STRICT_MODE", "true").lower() in ("true", "1", "yes")
+
+# Active admin sessions: token -> timestamp
+admin_sessions = set()
 
 # MongoDB setup (via MONGO_URI env var)
 MONGO_URI = os.environ.get("MONGO_URI", "")
 mongo_client = None
 db = None
 
-if MONGO_URI:
-    try:
-        from pymongo import MongoClient
-        mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-        db = mongo_client.get_default_database()
-        if db is None:
-            db = mongo_client["stand_db"]
-        mongo_client.admin.command('ping')
-        print("[MongoDB] Successfully connected to MongoDB.")
-    except Exception as e:
-        print(f"[MongoDB] Connection failed: {e}. Falling back to standalone mode.")
-        db = None
-else:
-    print("[MongoDB] No MONGO_URI configured. Running in standalone mode.")
+# In-memory fallback if MongoDB is not connected
+memory_keys = {}
+memory_heartbeats = []
+
+def init_mongo():
+    global mongo_client, db
+    if MONGO_URI:
+        try:
+            from pymongo import MongoClient
+            mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+            db = mongo_client.get_default_database()
+            if db is None:
+                db = mongo_client["stand_db"]
+            mongo_client.admin.command('ping')
+            print("[MongoDB] Successfully connected to MongoDB.")
+            
+            # Ensure indexes
+            db.keys.create_index("key", unique=True)
+            db.heartbeats.create_index("timestamp")
+        except Exception as e:
+            print(f"[MongoDB] Connection failed: {e}. Falling back to in-memory mode.")
+            db = None
+    else:
+        print("[MongoDB] No MONGO_URI configured. Running in in-memory mode.")
+
+init_mongo()
+
+def check_admin_auth(handler):
+    cookie_header = handler.headers.get('Cookie', '')
+    cookies = urllib.parse.parse_qs(cookie_header.replace('; ', '&'))
+    token = cookies.get('stand_admin_token', [''])[0]
+    return token in admin_sessions
 
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
     def send_json(self, data, status=200):
-        body = json.dumps(data).encode('utf-8')
+        body = json.dumps(data, default=str).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
@@ -67,131 +94,234 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 return {}
 
     def do_POST(self):
-        # 1. Menü Heartbeat
+        client_ip = self.headers.get('X-Forwarded-For', self.client_address[0]).split(',')[0].strip()
+
+        # ==========================================
+        # 1. ADMIN AUTHENTICATION
+        # ==========================================
+        if self.path == '/api/admin/login':
+            data = self.parse_body()
+            password = data.get("password", "")
+            if password == ADMIN_PASSWORD:
+                token = secrets.token_hex(24)
+                admin_sessions.add(token)
+                
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Set-Cookie', f'stand_admin_token={token}; Path=/; HttpOnly; SameSite=Lax')
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
+                return
+            else:
+                return self.send_json({"success": False, "error": "Hibás jelszó!"}, status=401)
+
+        if self.path == '/api/admin/logout':
+            cookie_header = self.headers.get('Cookie', '')
+            cookies = urllib.parse.parse_qs(cookie_header.replace('; ', '&'))
+            token = cookies.get('stand_admin_token', [''])[0]
+            if token in admin_sessions:
+                admin_sessions.remove(token)
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Set-Cookie', 'stand_admin_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT')
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
+            return
+
+        # ==========================================
+        # 2. ADMIN ACTIONS (PASSWORD PROTECTED)
+        # ==========================================
+        if self.path.startswith('/api/admin/'):
+            if not check_admin_auth(self):
+                return self.send_json({"error": "Unauthorized"}, status=401)
+
+            # Generate new key
+            if self.path == '/api/admin/keys/create':
+                data = self.parse_body()
+                tier = data.get("tier", "Ultimate") # Basic, Regular, Ultimate
+                note = data.get("note", "")
+                days = int(data.get("days", 0)) # 0 = lifetime
+
+                chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                rand_part = "".join(secrets.choice(chars) for _ in range(24))
+                key = f"Stand-{tier}-{rand_part}"
+                
+                expires_at = None
+                if days > 0:
+                    expires_at = datetime.utcnow() + timedelta(days=days)
+
+                privilege = "3"
+                root_name = f"Stand ({tier})"
+                unlocks = 255 if tier == "Ultimate" else 0
+                if tier == "Basic":
+                    privilege = "1"
+                elif tier == "Regular":
+                    privilege = "2"
+
+                key_doc = {
+                    "key": key,
+                    "tier": tier,
+                    "privilege": privilege,
+                    "unlocks": unlocks,
+                    "root_name": root_name,
+                    "note": note,
+                    "status": "active", # active, banned
+                    "created_at": datetime.utcnow(),
+                    "expires_at": expires_at,
+                    "hwid": "",
+                    "last_ip": "",
+                    "last_seen": None,
+                    "uses": 0
+                }
+
+                if db is not None:
+                    db.keys.insert_one(key_doc)
+                    key_doc.pop("_id", None)
+                else:
+                    memory_keys[key] = key_doc
+
+                return self.send_json({"success": True, "key": key_doc})
+
+            # Toggle ban
+            if self.path == '/api/admin/keys/toggle-ban':
+                data = self.parse_body()
+                key = data.get("key", "")
+                new_status = data.get("status", "banned")
+
+                if db is not None:
+                    res = db.keys.update_one({"key": key}, {"$set": {"status": new_status}})
+                    return self.send_json({"success": res.modified_count > 0, "status": new_status})
+                else:
+                    if key in memory_keys:
+                        memory_keys[key]["status"] = new_status
+                        return self.send_json({"success": True, "status": new_status})
+                return self.send_json({"success": False, "error": "Key not found"}, status=404)
+
+            # Delete key
+            if self.path == '/api/admin/keys/delete':
+                data = self.parse_body()
+                key = data.get("key", "")
+
+                if db is not None:
+                    res = db.keys.delete_one({"key": key})
+                    return self.send_json({"success": res.deleted_count > 0})
+                else:
+                    if key in memory_keys:
+                        del memory_keys[key]
+                        return self.send_json({"success": True})
+                return self.send_json({"success": False, "error": "Key not found"}, status=404)
+
+        # ==========================================
+        # 3. CLIENT HEARTBEAT (STRICT KEY VALIDATION)
+        # ==========================================
         if self.path == '/api/heartbeat':
             data = self.parse_body()
-            activation_key = data.get("a", "")
-            
-            # Default fallback tier logic (Ultimate)
-            privilege = "3"
-            unlocks = 255
-            root_name = "Stand (Ultimate)"
+            activation_key = data.get("a", "").strip()
+            hwid = data.get("h", "")
 
-            if "Basic-" in activation_key:
-                privilege = "1"
-                unlocks = 0
-                root_name = "Stand (Basic)"
-            elif "Regular-" in activation_key:
-                privilege = "2"
-                unlocks = 0
-                root_name = "Stand (Regular)"
-            elif "Ultimate-" in activation_key:
+            # Look up key in DB
+            key_doc = None
+            if db is not None:
+                key_doc = db.keys.find_one({"key": activation_key})
+            else:
+                key_doc = memory_keys.get(activation_key)
+
+            # --- STRICT VALIDATION ENFORCEMENT ---
+            if STRICT_MODE:
+                if not key_doc:
+                    # Log failed attempt
+                    log_entry = {
+                        "key": activation_key,
+                        "status": "REJECTED_NOT_FOUND",
+                        "client_ip": client_ip,
+                        "hwid": hwid,
+                        "timestamp": datetime.utcnow()
+                    }
+                    if db is not None:
+                        db.heartbeats.insert_one(log_entry)
+                    return self.send_json({"m": "Érvénytelen licenc kulcs! Vegye fel a kapcsolatot az adminnal."}, status=403)
+
+                if key_doc.get("status") == "banned":
+                    log_entry = {
+                        "key": activation_key,
+                        "status": "REJECTED_BANNED",
+                        "client_ip": client_ip,
+                        "hwid": hwid,
+                        "timestamp": datetime.utcnow()
+                    }
+                    if db is not None:
+                        db.heartbeats.insert_one(log_entry)
+                    return self.send_json({"m": "Ez a licenc kulcs tiltva van az adminisztrátor által!"}, status=403)
+
+                # Check expiration
+                expires_at = key_doc.get("expires_at")
+                if expires_at and isinstance(expires_at, datetime) and datetime.utcnow() > expires_at:
+                    log_entry = {
+                        "key": activation_key,
+                        "status": "REJECTED_EXPIRED",
+                        "client_ip": client_ip,
+                        "hwid": hwid,
+                        "timestamp": datetime.utcnow()
+                    }
+                    if db is not None:
+                        db.heartbeats.insert_one(log_entry)
+                    return self.send_json({"m": "Ez a licenc kulcs lejárt!"}, status=403)
+
+            # Extract privileges from validated key
+            if key_doc:
+                privilege = str(key_doc.get("privilege", "3"))
+                unlocks = int(key_doc.get("unlocks", 255))
+                root_name = key_doc.get("root_name", "Stand (Ultimate)")
+                
+                # Update usage stats
+                update_fields = {
+                    "last_seen": datetime.utcnow(),
+                    "last_ip": client_ip,
+                }
+                if hwid and not key_doc.get("hwid"):
+                    update_fields["hwid"] = hwid
+
+                if db is not None:
+                    db.keys.update_one({"key": activation_key}, {
+                        "$set": update_fields,
+                        "$inc": {"uses": 1}
+                    })
+                else:
+                    key_doc.update(update_fields)
+                    key_doc["uses"] = key_doc.get("uses", 0) + 1
+            else:
+                # If strict mode is somehow turned off, fallback
                 privilege = "3"
                 unlocks = 255
                 root_name = "Stand (Ultimate)"
-            elif "Free-" in activation_key:
-                privilege = "0"
-                unlocks = 0
-                root_name = "Stand (Free)"
 
-            # MongoDB lookup & logging
+            # Log heartbeat
+            log_entry = {
+                "key": activation_key,
+                "status": "SUCCESS",
+                "privilege": privilege,
+                "root_name": root_name,
+                "client_ip": client_ip,
+                "hwid": hwid,
+                "timestamp": datetime.utcnow()
+            }
             if db is not None:
                 try:
-                    key_record = db.accounts.find_one({"activation_key": activation_key})
-                    if not key_record:
-                        key_record = db.keys.find_one({"key": activation_key})
-                    
-                    if key_record:
-                        privilege = str(key_record.get("privilege", privilege))
-                        unlocks = int(key_record.get("unlocks", unlocks))
-                        root_name = key_record.get("root_name", root_name)
-                    else:
-                        db.accounts.insert_one({
-                            "activation_key": activation_key,
-                            "privilege": privilege,
-                            "unlocks": unlocks,
-                            "root_name": root_name,
-                            "created": datetime.utcnow()
-                        })
-
-                    db.heartbeats.insert_one({
-                        "key": activation_key,
-                        "privilege": privilege,
-                        "root_name": root_name,
-                        "client_ip": self.client_address[0],
-                        "payload": data,
-                        "timestamp": datetime.utcnow()
-                    })
+                    db.heartbeats.insert_one(log_entry)
                 except Exception as err:
-                    print(f"[MongoDB] Heartbeat error: {err}")
+                    print(f"[MongoDB] Heartbeat log error: {err}")
+            else:
+                memory_heartbeats.append(log_entry)
+                if len(memory_heartbeats) > 200:
+                    memory_heartbeats.pop(0)
 
             response = {
-                "s": privilege + "fake_signature",
+                "s": privilege + "stand_signature_ok",
                 "u": unlocks,
                 "r": root_name,
                 "t": "ACTVTE_SUCC2"
             }
             return self.send_json(response)
-
-        # 2. Basic Account Info (Web UI /account/)
-        if self.path in ('/api/basic_account_info', '/api/basic_account_info.php', '/api/basic_account_info.html'):
-            data = self.parse_body()
-            account_id = data.get("account_id", "")
-            
-            acc = None
-            if db is not None and account_id:
-                try:
-                    acc = db.accounts.find_one({"id": account_id})
-                except Exception as e:
-                    print(f"[MongoDB] Account info error: {e}")
-
-            if not acc:
-                # Default mock account response so web UI always works
-                acc = {
-                    "activation_key": f"Stand-Activate-{account_id[-16:]}" if account_id else "Stand-Activate-UltimateMockKey",
-                    "privilege": 3,
-                    "suspended_for": "",
-                    "coins": 0,
-                    "created_quiz_success": True
-                }
-
-            return self.send_json({
-                "activation_key": acc.get("activation_key", "Stand-Activate-UltimateMockKey"),
-                "privilege": int(acc.get("privilege", 3)),
-                "suspended_for": acc.get("suspended_for", ""),
-                "coins": int(acc.get("coins", 0)),
-                "created_quiz_success": bool(acc.get("created_quiz_success", True))
-            })
-
-        # 3. Redeem License Key (Web UI /account/register)
-        if self.path in ('/api/redeem', '/api/redeem.php', '/api/redeem.html'):
-            data = self.parse_body()
-            license_key = data.get("license_key", "")
-            
-            chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-            import random
-            account_id = "acc_" + "".join(random.choice(chars) for _ in range(27))
-            activation_key = "Stand-Activate-" + "".join(random.choice(chars) for _ in range(16))
-            privilege = 3
-
-            if db is not None:
-                try:
-                    db.accounts.insert_one({
-                        "id": account_id,
-                        "license_key": license_key,
-                        "activation_key": activation_key,
-                        "privilege": privilege,
-                        "created": datetime.utcnow()
-                    })
-                except Exception as e:
-                    print(f"[MongoDB] Redeem error: {e}")
-
-            return self.send_json({
-                "account_id": account_id,
-                "activation_key": activation_key,
-                "privilege": privilege,
-                "created_quiz_success": True
-            })
 
         # 4. Telemetry / Event logging
         if self.path in ('/api/event', '/api/event.php', '/api/event.html'):
@@ -200,11 +330,11 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 try:
                     db.events.insert_one({
                         "data": data,
-                        "client_ip": self.client_address[0],
+                        "client_ip": client_ip,
                         "timestamp": datetime.utcnow()
                     })
-                except Exception as e:
-                    print(f"[MongoDB] Event logging error: {e}")
+                except Exception:
+                    pass
             return self.send_text("1")
 
         return super().do_POST()
@@ -214,7 +344,70 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         if self.path in ('/healthz', '/ping'):
             return self.send_text("OK")
 
-        # Specific API endpoints that return JSON
+        # ==========================================
+        # ADMIN API (GET)
+        # ==========================================
+        if self.path == '/api/admin/check':
+            return self.send_json({"authenticated": check_admin_auth(self)})
+
+        if self.path == '/api/admin/stats':
+            if not check_admin_auth(self):
+                return self.send_json({"error": "Unauthorized"}, status=401)
+
+            total_keys = 0
+            active_keys = 0
+            banned_keys = 0
+            heartbeats_count = 0
+
+            if db is not None:
+                total_keys = db.keys.count_documents({})
+                active_keys = db.keys.count_documents({"status": "active"})
+                banned_keys = db.keys.count_documents({"status": "banned"})
+                since_yesterday = datetime.utcnow() - timedelta(hours=24)
+                heartbeats_count = db.heartbeats.count_documents({"timestamp": {"$gte": since_yesterday}})
+            else:
+                total_keys = len(memory_keys)
+                active_keys = sum(1 for k in memory_keys.values() if k.get("status") == "active")
+                banned_keys = sum(1 for k in memory_keys.values() if k.get("status") == "banned")
+                heartbeats_count = len(memory_heartbeats)
+
+            return self.send_json({
+                "total_keys": total_keys,
+                "active_keys": active_keys,
+                "banned_keys": banned_keys,
+                "heartbeats_24h": heartbeats_count,
+                "strict_mode": STRICT_MODE,
+                "db_connected": db is not None
+            })
+
+        if self.path == '/api/admin/keys':
+            if not check_admin_auth(self):
+                return self.send_json({"error": "Unauthorized"}, status=401)
+
+            keys_list = []
+            if db is not None:
+                cursor = db.keys.find({}, {"_id": 0}).sort("created_at", -1).limit(500)
+                keys_list = list(cursor)
+            else:
+                keys_list = list(memory_keys.values())
+                keys_list.sort(key=lambda x: x.get("created_at") or datetime.min, reverse=True)
+
+            return self.send_json(keys_list)
+
+        if self.path == '/api/admin/logs':
+            if not check_admin_auth(self):
+                return self.send_json({"error": "Unauthorized"}, status=401)
+
+            logs_list = []
+            if db is not None:
+                cursor = db.heartbeats.find({}, {"_id": 0}).sort("timestamp", -1).limit(100)
+                logs_list = list(cursor)
+            else:
+                logs_list = list(reversed(memory_heartbeats[-100:]))
+
+            return self.send_json(logs_list)
+
+        # Stand Menu APIs
         if self.path in ('/api/tuna.json', '/api/tuna.json.php', '/api/tuna.json.html'):
             bg54 = ""
             bg55 = ""
@@ -251,25 +444,27 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                     ver_text = f.read()
             return self.send_text(ver_text)
 
+        # Redirect /admin to /admin.html
+        if self.path == '/admin' or self.path == '/admin/':
+            self.send_response(302)
+            self.send_header('Location', '/admin.html')
+            self.end_headers()
+            return
+
         return super().do_GET()
 
     def translate_path(self, path):
         translated = super().translate_path(path)
-        
         if os.path.isdir(translated):
             return translated
-            
         if os.path.isfile(translated):
             return translated
-            
         if os.path.isfile(translated + '.html'):
             return translated + '.html'
-            
         if translated.endswith('.php'):
             html_path = translated[:-4] + '.html'
             if os.path.isfile(html_path):
                 return html_path
-                
         return translated
 
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -282,6 +477,7 @@ if __name__ == '__main__':
     server_address = ('0.0.0.0', PORT)
     with ThreadingHTTPServer(server_address, CustomHandler) as httpd:
         print(f"Stand MongoDB Server running on port {PORT} (0.0.0.0)...")
+        print(f"Admin Panel available at http://localhost:{PORT}/admin.html")
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
