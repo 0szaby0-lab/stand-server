@@ -205,7 +205,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 
             key_doc = None
             if db is not None:
-                key_doc = db.keys.find_one({"key": account_id})
+                key_doc = db.keys.find_one({"account_id": account_id})
             
             if not key_doc or key_doc.get("status") == "banned":
                 return self.send_json({"error": "Invalid or banned account"}, status=403)
@@ -359,16 +359,19 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             activation_key = data.get("a", "").strip()
             hwid = data.get("h", "")
 
-            # Look up key in DB
+            # Look up key in DB by activation_key (or fallback to license key if they paste that by mistake)
             key_doc = None
             if db is not None:
-                key_doc = db.keys.find_one({"key": activation_key})
+                key_doc = db.keys.find_one({"$or": [{"activation_key": activation_key}, {"key": activation_key}]})
             else:
-                key_doc = memory_keys.get(activation_key)
+                for k in memory_keys.values():
+                    if k.get("activation_key") == activation_key or k.get("key") == activation_key:
+                        key_doc = k
+                        break
 
             # --- STRICT VALIDATION ENFORCEMENT ---
             if STRICT_MODE:
-                if not key_doc:
+                if not key_doc or not key_doc.get("activation_key"):
                     # Log failed attempt
                     log_entry = {
                         "key": activation_key,
@@ -476,16 +479,19 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             key_doc = None
             if db is not None and account_id:
                 try:
-                    key_doc = db.keys.find_one({"key": account_id})
+                    key_doc = db.keys.find_one({"account_id": account_id})
                 except Exception as e:
                     print(f"[MongoDB] Account info error: {e}")
 
-            if not key_doc and account_id in memory_keys:
-                key_doc = memory_keys.get(account_id)
+            if not key_doc:
+                for k in memory_keys.values():
+                    if k.get("account_id") == account_id:
+                        key_doc = k
+                        break
 
             if key_doc:
                 return self.send_json({
-                    "activation_key": key_doc.get("key"),
+                    "activation_key": key_doc.get("activation_key"),
                     "privilege": int(key_doc.get("privilege", 3)),
                     "suspended_for": "Banned by Admin" if key_doc.get("status") == "banned" else "",
                     "coins": 0,
@@ -514,9 +520,27 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                     key_doc = None
             
             if key_doc:
+                # If already redeemed, return existing activation data
+                if key_doc.get("account_id") and key_doc.get("activation_key"):
+                    account_id = key_doc["account_id"]
+                    activation_key = key_doc["activation_key"]
+                else:
+                    # Generate new account_id and activation_key (31 random chars)
+                    chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+                    activation_key = "".join(secrets.choice(chars) for _ in range(31))
+                    
+                    id_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                    account_id = "acc_" + "".join(secrets.choice(id_chars) for _ in range(27))
+                    
+                    if db is not None:
+                        db.keys.update_one({"key": license_key}, {"$set": {"account_id": account_id, "activation_key": activation_key}})
+                    else:
+                        memory_keys[license_key]["account_id"] = account_id
+                        memory_keys[license_key]["activation_key"] = activation_key
+                        
                 return self.send_json({
-                    "account_id": key_doc["key"],
-                    "activation_key": key_doc["key"],
+                    "account_id": account_id,
+                    "activation_key": activation_key,
                     "privilege": int(key_doc.get("privilege", 3)),
                     "created_quiz_success": True
                 })
