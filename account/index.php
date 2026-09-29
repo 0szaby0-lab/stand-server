@@ -207,7 +207,11 @@ if ($_SERVER["REQUEST_URI"] == "/account/index")
 
 		function updateActivationKey()
 		{
-			document.querySelector("#activation-key").value="Stand-Activate-"+localStorage.getItem("activation_key");
+			var key = localStorage.getItem("activation_key");
+			if (!key.startsWith("Stand-Activate-")) {
+				key = "Stand-Activate-" + key;
+			}
+			document.querySelector("#activation-key").value = key;
 			document.querySelector("#discord-join-link").onclick = function()
 			{
 				kickOffDiscordAction("join");
