@@ -466,7 +466,9 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 "s": privilege + "stand_signature_ok",
                 "u": unlocks,
                 "r": root_name,
-                "t": "ACTVTE_SUCC2"
+                "t": "ACTVTE_SUCC2",
+                "p": [],
+                "d": 0
             }
             return self.send_json(response)
 
