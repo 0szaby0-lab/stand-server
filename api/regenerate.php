@@ -7,8 +7,8 @@ if(empty($_POST["account_id"])||strlen($_POST["account_id"])!=31)
 require "../src/include.php";
 header("Content-Type: text/plain");
 $key=generateKey(31);
-$res = $db->query("SELECT `activation_key`, `last_regen_ip`, `last_regen_ua_hash`, `last_regen_time` FROM `accounts` WHERE `id`=? AND `migrated_from`!='1' AND `suspended_for`=''", "s", $_POST["account_id"]);
-if (count($res) == 1)
+$res = $db->query("SELECT `activation_key`, `last_regen_ip`, `last_regen_ua_hash`, `last_regen_time`, `suspended_for` FROM `accounts` WHERE `id`=? AND `migrated_from`!='1'", "s", $_POST["account_id"]);
+if (count($res) == 1 && empty($res[0]["suspended_for"]))
 {
 	require "../src/antisharing.php";
 	$allow_regen = false;
