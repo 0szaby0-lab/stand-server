@@ -22,11 +22,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     global $db;
-    $db->query("INSERT INTO `accounts` (`activation_key`, `privilege`, `custom_root_name`) VALUES (?, ?, ?)", "sis", $fakeKey, $priv, $custom_name);
+    $chars_id = "abcdefghijklmnopqrstuvwxyz0123456789";
+    $account_id = "";
+    for($i = 0; $i < 31; $i++) {
+        $account_id .= $chars_id[rand(0, strlen($chars_id) - 1)];
+    }
+
+    $db->query("INSERT INTO `accounts` (`id`, `activation_key`, `privilege`, `custom_root_name`) VALUES (?, ?, ?, ?)", "ssis", $account_id, $fakeKey, $priv, $custom_name);
     
     $message = "Key generated: " . $fakeKey;
+    header("Location: admin.php?msg=" . urlencode($message));
+    exit;
 }
 
+$message = isset($_GET['msg']) ? $_GET['msg'] : (isset($message) ? $message : null);
 $keys = $db->query("SELECT * FROM `accounts` ORDER BY `id` DESC LIMIT 50");
 ?>
 <!DOCTYPE html>
