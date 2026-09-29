@@ -148,11 +148,20 @@ if ($_SERVER["REQUEST_URI"] == "/account/index")
 		{
 			if(confirm("Are you absolutely sure you need to regenerate your activation key? E.g., you shared the activation key and now want to take it back."))
 			{
-				let fakeKey = "";
-				const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-				for(let i=0; i<30; i++) fakeKey += chars.charAt(Math.floor(Math.random() * chars.length));
-				update_activation_key(fakeKey);
-				updateActivationKey();
+				$.post("/api/regenerate", {
+					account_id: localStorage.getItem("account_id")
+				}).done(function(data)
+				{
+					if (data && data.activation_key) {
+						update_activation_key(data.activation_key);
+						updateActivationKey();
+						alert("Sikeresen lecserélve!");
+					} else {
+						alert("Hiba történt a generáláskor!");
+					}
+				}).fail(function() {
+					alert("Hálózati hiba történt.");
+				});
 			}
 		}
 
