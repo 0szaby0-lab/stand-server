@@ -7,9 +7,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     // Generate a key
     $chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-    $fakeKey = "Stand-Activate-" . $tier . "-";
+    $activationKey = "Stand-Activate-" . $tier . "-";
     for($i = 0; $i < 25; $i++) {
-        $fakeKey .= $chars[rand(0, strlen($chars) - 1)];
+        $activationKey .= $chars[rand(0, strlen($chars) - 1)];
     }
 
     $priv = 0;
@@ -28,9 +28,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $account_id .= $chars_id[rand(0, strlen($chars_id) - 1)];
     }
 
-    $db->query("INSERT INTO `accounts` (`id`, `activation_key`, `privilege`, `custom_root_name`, `created`) VALUES (?, ?, ?, ?, ?)", "ssisi", $account_id, $fakeKey, $priv, $custom_name, time());
+    $db->query("INSERT INTO `accounts` (`id`, `activation_key`, `privilege`, `custom_root_name`, `created`) VALUES (?, ?, ?, ?, ?)", "ssisi", $account_id, $activationKey, $priv, $custom_name, time());
     
-    $message = "Key generated: " . $fakeKey;
+    $message = "Key generated: " . $activationKey;
     header("Location: admin.php?msg=" . urlencode($message));
     exit;
 }
