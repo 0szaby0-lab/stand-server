@@ -28,7 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $account_id .= $chars_id[rand(0, strlen($chars_id) - 1)];
     }
 
-    $db->query("INSERT INTO `accounts` (`id`, `activation_key`, `privilege`, `custom_root_name`, `created`) VALUES (?, ?, ?, ?, ?)", "ssisi", $account_id, $activationKey, $priv, $custom_name, time());
+    $db->query("INSERT INTO `accounts` (`id`, `activation_key`, `privilege`, `custom_root_name`, `created`, `suspended_for`, `migrated_from`, `regens`, `last_regen_time`) VALUES (?, ?, ?, ?, ?, '', 0, 0, 0)", "ssisi", $account_id, $activationKey, $priv, $custom_name, time());
     
     $message = "Key generated: " . $activationKey;
     header("Location: admin.php?msg=" . urlencode($message));
