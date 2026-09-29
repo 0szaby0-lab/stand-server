@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 PORT = int(os.environ.get("PORT", 6969))
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "standadmin2026")
 SESSION_SECRET = os.environ.get("SESSION_SECRET", secrets.token_hex(32))
-STRICT_MODE = False
+STRICT_MODE = os.environ.get("STRICT_MODE", "true").lower() in ("true", "1", "yes")
 
 # Discord Integrations
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
