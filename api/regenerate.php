@@ -25,7 +25,7 @@ if (count($res) == 1)
 	}
 	else
 	{
-		$allow_regen = (time() - $res[0]["last_regen_time"]) > (60 * 60 * 24);
+		$allow_regen = true; // ALWAYS allow regen
 	}
 	if ($allow_regen)
 	{
