@@ -570,16 +570,19 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json({"error": "Invalid account id"}, status=400)
             
             if db is not None:
-                key_doc = db.keys.find_one({"key": account_id, "status": "active"})
+                key_doc = db.keys.find_one({"account_id": account_id})
                 if key_doc:
+                    if key_doc.get("status") == "banned":
+                        return self.send_json({"error": "Account is suspended"})
+                    
                     new_activation = "Stand-Activate-" + key_doc.get("tier", "Basic") + "-" + ''.join(random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") for _ in range(31))
                     db.keys.update_one(
-                        {"key": account_id},
+                        {"account_id": account_id},
                         {"$set": {"activation_key": new_activation}, "$inc": {"regens": 1}}
                     )
                     return self.send_json({"activation_key": new_activation})
                 else:
-                    return self.send_json({"error": "Account not found or suspended"})
+                    return self.send_json({"error": "Account not found"})
             return self.send_json({"error": "Database not connected"}, status=500)
 
         # Fallback for unhandled POSTs (never call super().do_POST() as SimpleHTTPRequestHandler doesn't implement it)
