@@ -28,7 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $account_id .= $chars_id[rand(0, strlen($chars_id) - 1)];
     }
 
-    $db->query("INSERT INTO `accounts` (`id`, `activation_key`, `privilege`, `custom_root_name`) VALUES (?, ?, ?, ?)", "ssis", $account_id, $fakeKey, $priv, $custom_name);
+    $db->query("INSERT INTO `accounts` (`id`, `activation_key`, `privilege`, `custom_root_name`, `created`) VALUES (?, ?, ?, ?, ?)", "ssisi", $account_id, $fakeKey, $priv, $custom_name, time());
     
     $message = "Key generated: " . $fakeKey;
     header("Location: admin.php?msg=" . urlencode($message));
@@ -36,7 +36,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $message = isset($_GET['msg']) ? $_GET['msg'] : (isset($message) ? $message : null);
-$keys = $db->query("SELECT * FROM `accounts` ORDER BY `id` DESC LIMIT 50");
+$keys = $db->query("SELECT * FROM `accounts` ORDER BY `created` DESC LIMIT 50");
 ?>
 <!DOCTYPE html>
 <html>
