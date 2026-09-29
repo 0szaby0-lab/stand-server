@@ -576,7 +576,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                     if key_doc.get("status") == "banned":
                         return self.send_json({"error": "Account is suspended"})
                     
-                    new_activation = "Stand-Activate-" + ''.join(random.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(30))
+                    new_activation = ''.join(random.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(31))
                     db.keys.update_one(
                         {"account_id": account_id},
                         {"$set": {"activation_key": new_activation}, "$inc": {"regens": 1}}
