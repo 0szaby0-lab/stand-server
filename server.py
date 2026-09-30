@@ -142,16 +142,25 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         if content_length <= 0:
             return {}
         post_data = self.rfile.read(content_length)
-        content_type = self.headers.get('Content-Type', '')
+        decoded = post_data.decode('utf-8')
         
+        # Try JSON first (game client may not set Content-Type)
+        stripped = decoded.strip()
+        if stripped.startswith('{') or stripped.startswith('['):
+            try:
+                return json.loads(stripped)
+            except Exception:
+                pass
+        
+        content_type = self.headers.get('Content-Type', '')
         if 'application/json' in content_type:
             try:
-                return json.loads(post_data.decode('utf-8'))
+                return json.loads(decoded)
             except Exception:
                 return {}
         else:
             try:
-                parsed = urllib.parse.parse_qs(post_data.decode('utf-8'))
+                parsed = urllib.parse.parse_qs(decoded)
                 return {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
             except Exception:
                 return {}
